@@ -84,7 +84,7 @@ pub fn start_connection(
         stop_flag: stop_flag_clone.clone(),
         input_tx,
     };
-    eprintln!("[DEBUG] start_connection: registering session={} protocol={}", session_id, protocol);
+    eprintln!("[DEBUG] start_connection: registering session={} protocol={} hostname={} port={} user={} auth={} password_saved={}", session_id, protocol, conn_config.hostname, conn_config.port, conn_config.username, conn_config.auth_method, conn_config.password_saved);
     registry
         .lock()
         .map_err(|e| e.to_string())?
@@ -198,13 +198,16 @@ fn connect_ssh2(
     input_rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<(), String> {
     let addr = format!("{}:{}", conn.hostname, conn.port);
+    eprintln!("[DEBUG] SSH connecting to {}", addr);
     let tcp = TcpStream::connect(&addr).map_err(|e| format!("Connection failed: {}", e))?;
     tcp.set_read_timeout(Some(std::time::Duration::from_millis(50)))
         .ok();
 
     let mut session = ssh2::Session::new().map_err(|e| format!("SSH session error: {}", e))?;
     session.set_tcp_stream(tcp);
+    eprintln!("[DEBUG] SSH handshake...");
     session.handshake().map_err(|e| format!("SSH handshake failed: {}", e))?;
+    eprintln!("[DEBUG] SSH handshake OK");
 
     match conn.auth_method.as_str() {
         "password" => {
@@ -217,6 +220,7 @@ fn connect_ssh2(
                     }
                 })
                 .unwrap_or_default();
+            eprintln!("[DEBUG] SSH auth: method=password pw_len={}", pw.len());
             session
                 .userauth_password(&conn.username, &pw)
                 .map_err(|e| format!("Password auth failed: {}", e))?;
