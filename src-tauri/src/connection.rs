@@ -204,6 +204,7 @@ fn connect_ssh2(
 
     let mut session = ssh2::Session::new().map_err(|e| format!("SSH session error: {}", e))?;
     session.set_tcp_stream(tcp);
+    session.set_blocking(false);
     session.handshake().map_err(|e| format!("SSH handshake failed: {}", e))?;
 
     match conn.auth_method.as_str() {
@@ -344,7 +345,10 @@ fn connect_ssh2(
                 thread::sleep(std::time::Duration::from_millis(10));
                 continue;
             }
-            Err(_) => break,
+            Err(e) => {
+                eprintln!("[DEBUG] SSH channel.read error: {}", e);
+                break;
+            }
         }
     }
 
