@@ -214,7 +214,7 @@ fn connect_ssh2(
             let pw = password
                 .or_else(|| {
                     if conn.password_saved {
-                        credentials::get_password(session_id).ok()
+                        credentials::get_password(app_dir, session_id).ok()
                     } else {
                         None
                     }

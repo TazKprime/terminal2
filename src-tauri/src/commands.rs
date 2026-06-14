@@ -54,7 +54,7 @@ pub fn delete_session_profile(app: AppHandle, session_id: String) -> Result<(), 
     folders.folders.retain(|f| !f.sessions.is_empty());
     config::save_folders(&app_dir, &folders)?;
 
-    let _ = credentials::delete_password(&session_id);
+    let _ = credentials::delete_password(&app_dir, &session_id);
     Ok(())
 }
 
@@ -83,13 +83,15 @@ pub fn save_theme_profile(app: AppHandle, theme: config::ThemeProfile) -> Result
 }
 
 #[tauri::command]
-pub fn save_session_password(session_id: String, password: String) -> Result<(), String> {
-    credentials::save_password(&session_id, &password)
+pub fn save_session_password(app: AppHandle, session_id: String, password: String) -> Result<(), String> {
+    let app_dir = get_app_dir(&app);
+    credentials::save_password(&app_dir, &session_id, &password)
 }
 
 #[tauri::command]
-pub fn delete_session_password(session_id: String) -> Result<(), String> {
-    credentials::delete_password(&session_id)
+pub fn delete_session_password(app: AppHandle, session_id: String) -> Result<(), String> {
+    let app_dir = get_app_dir(&app);
+    credentials::delete_password(&app_dir, &session_id)
 }
 
 #[tauri::command]
