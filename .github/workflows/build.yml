@@ -29,20 +29,21 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build frontend
-        run: npm run build
+      - name: Verify tauri CLI
+        run: npx tauri --version
+        shell: cmd
 
-      - name: Build Tauri app
-        run: npx tauri build
+      - name: Verify dist exists
+        run: npm run build && dir dist
+        shell: cmd
+
+      - name: Build Tauri app (verbose)
+        run: npx tauri build --verbose
+        shell: cmd
         env:
           TAURI_SIGNING_PRIVATE_KEY: ""
 
-      - name: List build outputs
-        if: always()
-        shell: cmd
-        run: dir src-tauri\target\release\bundle /s /b || echo "No bundle directory found"
-
-      - name: Upload portable .exe
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
