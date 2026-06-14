@@ -32,12 +32,14 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      - name: Build Tauri app (portable)
-        run: npx tauri build --bundles portable
+      - name: Build Tauri app
+        run: npx tauri build
 
       - name: Upload portable .exe
         uses: actions/upload-artifact@v4
         with:
           name: MyTerminal-portable
-          path: src-tauri/target/release/bundle/nsis/*.exe
-          if-no-files-found: error
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/*portable*.exe
+          if-no-files-found: warn
