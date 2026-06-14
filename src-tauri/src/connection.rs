@@ -46,6 +46,7 @@ impl ConnectionRegistry {
     }
 
     pub fn send_input(&self, session_id: &str, data: Vec<u8>) -> Result<(), String> {
+        eprintln!("[DEBUG] send_input session={} bytes={}", session_id, data.len());
         if let Some(handle) = self.connections.get(session_id) {
             handle
                 .input_tx
@@ -53,6 +54,7 @@ impl ConnectionRegistry {
                 .map_err(|e| format!("Failed to send input: {}", e))?;
             return Ok(());
         }
+        eprintln!("[DEBUG] send_input: no connection found for session {}", session_id);
         Err(format!("No connection for session {}", session_id))
     }
 }
@@ -82,6 +84,7 @@ pub fn start_connection(
         stop_flag: stop_flag_clone.clone(),
         input_tx,
     };
+    eprintln!("[DEBUG] start_connection: registering session={} protocol={}", session_id, protocol);
     registry
         .lock()
         .map_err(|e| e.to_string())?
@@ -173,6 +176,7 @@ fn drain_input(input_rx: &mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
                 if data.is_empty() {
                     return all;
                 }
+                eprintln!("[DEBUG] drain_input: got {} bytes", data.len());
                 all.extend_from_slice(&data);
             }
             Err(_) => break,
@@ -301,7 +305,9 @@ fn connect_ssh2(
 
         let input = drain_input(&input_rx);
         if !input.is_empty() {
-            if let Err(_) = channel.write_all(&input) {
+            eprintln!("[DEBUG] SSH writing {} bytes to channel", input.len());
+            if let Err(e) = channel.write_all(&input) {
+                eprintln!("[DEBUG] SSH write error: {}", e);
                 break;
             }
         }

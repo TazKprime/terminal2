@@ -102,10 +102,11 @@ export default function TerminalTab({
     term.onData((data) => {
       const encoder = new TextEncoder();
       const bytes = encoder.encode(data);
+      console.error(`[DEBUG] TerminalTab onData: ${bytes.length} bytes, tabId=${tabId}`);
       invoke("write_to_connection", {
         sessionId: tabId,
         data: Array.from(bytes),
-      }).catch((e) => console.error("Write failed:", e));
+      }).catch((e) => console.error("[DEBUG] Write failed:", e));
     });
 
     term.onResize(({ cols, rows }) => {
@@ -143,9 +144,12 @@ export default function TerminalTab({
     window.addEventListener("keydown", handleKeyDown);
 
     const unlistenData = listen(`data-${tabId}`, (event: any) => {
-      if (xtermRef.current && event.payload?.data) {
+      if (event.payload?.data) {
         const bytes = new Uint8Array(event.payload.data);
-        xtermRef.current.write(bytes);
+        console.error(`[DEBUG] TerminalTab data event: ${bytes.length} bytes, xterm=${!!xtermRef.current}`);
+        if (xtermRef.current) {
+          xtermRef.current.write(bytes);
+        }
       }
     });
 

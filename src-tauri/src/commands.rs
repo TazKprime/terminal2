@@ -116,6 +116,7 @@ pub fn write_to_connection(
     data: Vec<u8>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    eprintln!("[DEBUG] write_to_connection session={} bytes={}", session_id, data.len());
     connection::write_to_connection(&state.registry, &session_id, &data)
 }
 
