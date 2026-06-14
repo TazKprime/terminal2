@@ -204,7 +204,6 @@ fn connect_ssh2(
 
     let mut session = ssh2::Session::new().map_err(|e| format!("SSH session error: {}", e))?;
     session.set_tcp_stream(tcp);
-    session.set_blocking(false);
     session.handshake().map_err(|e| format!("SSH handshake failed: {}", e))?;
 
     match conn.auth_method.as_str() {
@@ -265,6 +264,8 @@ fn connect_ssh2(
     channel
         .shell()
         .map_err(|e| format!("Shell request failed: {}", e))?;
+
+    session.set_blocking(false);
 
     let _ = app.emit(
         &format!("status-{}", session_id),
