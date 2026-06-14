@@ -2,22 +2,20 @@ import { useEffect, useRef, useCallback } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
+import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { SessionProfile, ThemeProfile } from "../types";
 
 interface TerminalTabProps {
   tabId: string;
   session: SessionProfile;
   themes: ThemeProfile[];
-  onData: (data: Uint8Array) => void;
-  onResize: (cols: number, rows: number) => void;
 }
 
 export default function TerminalTab({
   tabId,
   session,
   themes,
-  onData,
-  onResize,
 }: TerminalTabProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
@@ -101,18 +99,21 @@ export default function TerminalTab({
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
 
-    if (!(window as any).__xtermInstances) {
-      (window as any).__xtermInstances = {};
-    }
-    (window as any).__xtermInstances[tabId] = term;
-
     term.onData((data) => {
       const encoder = new TextEncoder();
-      onData(encoder.encode(data));
+      const bytes = encoder.encode(data);
+      invoke("write_to_connection", {
+        sessionId: tabId,
+        data: Array.from(bytes),
+      }).catch((e) => console.error("Write failed:", e));
     });
 
     term.onResize(({ cols, rows }) => {
-      onResize(cols, rows);
+      invoke("resize_connection", {
+        sessionId: tabId,
+        cols,
+        rows,
+      }).catch(() => {});
     });
 
     const handleResize = () => {
@@ -125,7 +126,6 @@ export default function TerminalTab({
 
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(terminalRef.current);
-
     window.addEventListener("resize", handleResize);
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -140,15 +140,21 @@ export default function TerminalTab({
         }
       }
     };
-
     window.addEventListener("keydown", handleKeyDown);
 
+    const unlistenData = listen(`data-${tabId}`, (event: any) => {
+      if (xtermRef.current && event.payload?.data) {
+        const bytes = new Uint8Array(event.payload.data);
+        xtermRef.current.write(bytes);
+      }
+    });
+
     return () => {
+      unlistenData.then((fn) => fn());
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("keydown", handleKeyDown);
       resizeObserver.disconnect();
       term.dispose();
-      delete (window as any).__xtermInstances?.[tabId];
     };
   }, [tabId]);
 
@@ -181,9 +187,7 @@ export default function TerminalTab({
   };
 
   return (
-    <div
-      style={{ width: "100%", height: "100%", position: "relative" }}
-    >
+    <div style={{ width: "100%", height: "100%", position: "relative" }}>
       <div
         id={`search-${tabId}`}
         className="search-bar"

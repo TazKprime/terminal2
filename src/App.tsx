@@ -1,9 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Terminal as XTerm } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { SearchAddon } from "@xterm/addon-search";
 import "@xterm/xterm/css/xterm.css";
 import Sidebar from "./components/Sidebar";
 import TerminalTab from "./components/TerminalTab";
@@ -45,7 +42,7 @@ export default function App() {
 
     tabs.forEach((tab) => {
       const statusUnlisten = listen(`status-${tab.id}`, (event: any) => {
-        const { status, message } = event.payload;
+        const { status } = event.payload;
         setTabs((prev) =>
           prev.map((t) =>
             t.id === tab.id ? { ...t, status } : t
@@ -53,15 +50,6 @@ export default function App() {
         );
       });
       unlisteners.push(() => statusUnlisten.then((fn) => fn()));
-
-      const dataUnlisten = listen(`data-${tab.id}`, (event: any) => {
-        const xtermInstances = (window as any).__xtermInstances;
-        if (xtermInstances && xtermInstances[tab.id]) {
-          const bytes = new Uint8Array(event.payload.data);
-          xtermInstances[tab.id].write(bytes);
-        }
-      });
-      unlisteners.push(() => dataUnlisten.then((fn) => fn()));
     });
 
     return () => {
@@ -218,39 +206,6 @@ export default function App() {
     []
   );
 
-  const handleSendToTab = useCallback(
-    async (data: Uint8Array) => {
-      if (activeTab) {
-        try {
-          await invoke("write_to_connection", {
-            sessionId: activeTab,
-            data: Array.from(data),
-          });
-        } catch (e) {
-          console.error("Write failed:", e);
-        }
-      }
-    },
-    [activeTab]
-  );
-
-  const handleResizeTab = useCallback(
-    async (cols: number, rows: number) => {
-      if (activeTab) {
-        try {
-          await invoke("resize_connection", {
-            sessionId: activeTab,
-            cols,
-            rows,
-          });
-        } catch (e) {
-          console.error("Resize failed:", e);
-        }
-      }
-    },
-    [activeTab]
-  );
-
   return (
     <div className="app-layout">
       <Sidebar
@@ -281,7 +236,6 @@ export default function App() {
                 onClick={() => setActiveTab(tab.id)}
               >
                 <span
-                  className={`status-dot ${tab.status}`}
                   style={{
                     width: 6,
                     height: 6,
@@ -334,8 +288,6 @@ export default function App() {
                   tabId={tab.id}
                   session={tab.profile}
                   themes={themes}
-                  onData={handleSendToTab}
-                  onResize={handleResizeTab}
                 />
               </div>
             ))
