@@ -18,7 +18,7 @@ pub struct ConnectionRegistry {
 pub struct ConnectionHandle {
     pub session_id: String,
     pub stop_flag: Arc<Mutex<bool>>,
-    pub input_tx: Option<mpsc::Sender<Vec<u8>>>,
+    pub input_tx: mpsc::Sender<Vec<u8>>,
 }
 
 impl ConnectionRegistry {
@@ -41,21 +41,19 @@ impl ConnectionRegistry {
             if let Ok(mut flag) = handle.stop_flag.lock() {
                 *flag = true;
             }
-            if let Some(tx) = &handle.input_tx {
-                let _ = tx.send(vec![]);
-            }
+            let _ = handle.input_tx.send(vec![]);
         }
     }
 
     pub fn send_input(&self, session_id: &str, data: Vec<u8>) -> Result<(), String> {
         if let Some(handle) = self.connections.get(session_id) {
-            if let Some(tx) = &handle.input_tx {
-                tx.send(data)
-                    .map_err(|e| format!("Failed to send input: {}", e))?;
-                return Ok(());
-            }
+            handle
+                .input_tx
+                .send(data)
+                .map_err(|e| format!("Failed to send input: {}", e))?;
+            return Ok(());
         }
-        Err(format!("No input channel for session {}", session_id))
+        Err(format!("No connection for session {}", session_id))
     }
 }
 
@@ -78,16 +76,16 @@ pub fn start_connection(
     let stop_flag_clone = stop_flag.clone();
 
     let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>();
-    let _input_tx_for_handle = input_tx.clone();
 
-    if protocol == "simulation" {
-        let handle = ConnectionHandle {
-            session_id: session_id.clone(),
-            stop_flag: stop_flag_clone.clone(),
-            input_tx: Some(input_tx),
-        };
-        registry.lock().map_err(|e| e.to_string())?.insert(session_id.clone(), handle);
-    }
+    let handle = ConnectionHandle {
+        session_id: session_id.clone(),
+        stop_flag: stop_flag_clone.clone(),
+        input_tx,
+    };
+    registry
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(session_id.clone(), handle);
 
     thread::spawn(move || {
         let _ = app.emit(
@@ -103,40 +101,40 @@ pub fn start_connection(
                 &term_config,
                 &logging_config,
                 &automation,
-                &appearance,
                 &app_dir,
                 password,
                 stop_flag_clone,
+                input_rx,
             ),
             "telnet" => connect_telnet(
                 &app,
                 &session_id,
                 &conn_config,
-                &term_config,
                 &logging_config,
                 &automation,
                 &app_dir,
                 stop_flag_clone,
+                input_rx,
             ),
             "telnet-ssl" => connect_telnet_ssl(
                 &app,
                 &session_id,
                 &conn_config,
-                &term_config,
                 &logging_config,
                 &automation,
                 &app_dir,
                 stop_flag_clone,
+                input_rx,
             ),
             "rlogin" => connect_rlogin(
                 &app,
                 &session_id,
                 &conn_config,
-                &term_config,
                 &logging_config,
                 &automation,
                 &app_dir,
                 stop_flag_clone,
+                input_rx,
             ),
             "simulation" => connect_simulation(
                 &app,
@@ -167,6 +165,22 @@ pub fn start_connection(
     Ok(())
 }
 
+fn drain_input(input_rx: &mpsc::Receiver<Vec<u8>>) -> Vec<u8> {
+    let mut all = Vec::new();
+    loop {
+        match input_rx.try_recv() {
+            Ok(data) => {
+                if data.is_empty() {
+                    return all;
+                }
+                all.extend_from_slice(&data);
+            }
+            Err(_) => break,
+        }
+    }
+    all
+}
+
 fn connect_ssh2(
     app: &AppHandle,
     session_id: &str,
@@ -174,14 +188,14 @@ fn connect_ssh2(
     term: &TerminalConfig,
     log_config: &LoggingConfig,
     automation: &LogonAutomation,
-    _appearance: &AppearanceConfig,
     app_dir: &std::path::Path,
     password: Option<String>,
     stop_flag: Arc<Mutex<bool>>,
+    input_rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<(), String> {
     let addr = format!("{}:{}", conn.hostname, conn.port);
     let tcp = TcpStream::connect(&addr).map_err(|e| format!("Connection failed: {}", e))?;
-    tcp.set_read_timeout(Some(std::time::Duration::from_millis(100)))
+    tcp.set_read_timeout(Some(std::time::Duration::from_millis(50)))
         .ok();
 
     let mut session = ssh2::Session::new().map_err(|e| format!("SSH session error: {}", e))?;
@@ -285,6 +299,13 @@ fn connect_ssh2(
             }
         }
 
+        let input = drain_input(&input_rx);
+        if !input.is_empty() {
+            if let Err(_) = channel.write_all(&input) {
+                break;
+            }
+        }
+
         match channel.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
@@ -335,17 +356,17 @@ fn connect_telnet(
     app: &AppHandle,
     session_id: &str,
     conn: &ConnectionConfig,
-    _term: &TerminalConfig,
     log_config: &LoggingConfig,
     automation: &LogonAutomation,
     app_dir: &std::path::Path,
     stop_flag: Arc<Mutex<bool>>,
+    input_rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<(), String> {
     let addr = format!("{}:{}", conn.hostname, conn.port);
     let mut stream =
         TcpStream::connect(&addr).map_err(|e| format!("Telnet connection failed: {}", e))?;
     stream
-        .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+        .set_read_timeout(Some(std::time::Duration::from_millis(50)))
         .ok();
 
     let _ = app.emit(
@@ -386,6 +407,13 @@ fn connect_telnet(
     loop {
         if let Ok(flag) = stop_flag.lock() {
             if *flag {
+                break;
+            }
+        }
+
+        let input = drain_input(&input_rx);
+        if !input.is_empty() {
+            if stream.write_all(&input).is_err() {
                 break;
             }
         }
@@ -438,11 +466,11 @@ fn connect_telnet_ssl(
     app: &AppHandle,
     session_id: &str,
     conn: &ConnectionConfig,
-    _term: &TerminalConfig,
     log_config: &LoggingConfig,
     automation: &LogonAutomation,
     app_dir: &std::path::Path,
     stop_flag: Arc<Mutex<bool>>,
+    input_rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<(), String> {
     let addr = format!("{}:{}", conn.hostname, conn.port);
     let tcp = TcpStream::connect(&addr).map_err(|e| format!("TCP connection failed: {}", e))?;
@@ -458,7 +486,7 @@ fn connect_telnet_ssl(
         .map_err(|e| format!("TLS handshake failed: {}", e))?;
     stream
         .get_ref()
-        .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+        .set_read_timeout(Some(std::time::Duration::from_millis(50)))
         .ok();
 
     let _ = app.emit(
@@ -499,6 +527,13 @@ fn connect_telnet_ssl(
     loop {
         if let Ok(flag) = stop_flag.lock() {
             if *flag {
+                break;
+            }
+        }
+
+        let input = drain_input(&input_rx);
+        if !input.is_empty() {
+            if stream.write_all(&input).is_err() {
                 break;
             }
         }
@@ -551,17 +586,17 @@ fn connect_rlogin(
     app: &AppHandle,
     session_id: &str,
     conn: &ConnectionConfig,
-    _term: &TerminalConfig,
     log_config: &LoggingConfig,
     automation: &LogonAutomation,
     app_dir: &std::path::Path,
     stop_flag: Arc<Mutex<bool>>,
+    input_rx: mpsc::Receiver<Vec<u8>>,
 ) -> Result<(), String> {
     let addr = format!("{}:{}", conn.hostname, conn.port);
     let mut stream =
         TcpStream::connect(&addr).map_err(|e| format!("RLogin connection failed: {}", e))?;
     stream
-        .set_read_timeout(Some(std::time::Duration::from_millis(100)))
+        .set_read_timeout(Some(std::time::Duration::from_millis(50)))
         .ok();
 
     let mut handshake = Vec::new();
@@ -612,6 +647,13 @@ fn connect_rlogin(
     loop {
         if let Ok(flag) = stop_flag.lock() {
             if *flag {
+                break;
+            }
+        }
+
+        let input = drain_input(&input_rx);
+        if !input.is_empty() {
+            if stream.write_all(&input).is_err() {
                 break;
             }
         }
