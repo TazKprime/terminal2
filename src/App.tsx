@@ -32,10 +32,17 @@ export default function App() {
   const [modal, setModal] = useState<ModalType>(null);
   const [editingSession, setEditingSession] = useState<SessionProfile | null>(null);
   const [editingTheme, setEditingTheme] = useState<ThemeProfile | null>(null);
+  const [passwordPrompt, setPasswordPrompt] = useState<{ session: SessionProfile; resolve: (pw: string | null) => void } | null>(null);
 
   useEffect(() => {
     loadData();
   }, []);
+
+  const promptPassword = (session: SessionProfile): Promise<string | null> => {
+    return new Promise((resolve) => {
+      setPasswordPrompt({ session, resolve });
+    });
+  };
 
   useEffect(() => {
     const unlisteners: (() => void)[] = [];
@@ -76,6 +83,18 @@ export default function App() {
 
   const handleConnect = useCallback(
     async (session: SessionProfile, password?: string) => {
+      let effectivePassword = password || null;
+
+      if (
+        !effectivePassword &&
+        session.protocol === "ssh2" &&
+        session.connection.authMethod === "password" &&
+        !session.connection.passwordSaved
+      ) {
+        effectivePassword = await promptPassword(session);
+        if (effectivePassword === null) return;
+      }
+
       const tabId = session.id || `quick-${Date.now()}`;
       const tabSession: TabSession = {
         id: tabId,
@@ -90,7 +109,7 @@ export default function App() {
       try {
         await invoke("connect_session", {
           session: { ...session, id: tabId },
-          password: password || null,
+          password: effectivePassword,
         });
       } catch (e) {
         console.error("Connect failed:", e);
@@ -360,6 +379,66 @@ export default function App() {
           onClose={() => setModal(null)}
         />
       )}
+
+      {passwordPrompt && (
+        <PasswordPrompt
+          sessionName={passwordPrompt.session.name}
+          onSubmit={(pw) => {
+            passwordPrompt.resolve(pw);
+            setPasswordPrompt(null);
+          }}
+          onCancel={() => {
+            passwordPrompt.resolve(null);
+            setPasswordPrompt(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function PasswordPrompt({
+  sessionName,
+  onSubmit,
+  onCancel,
+}: {
+  sessionName: string;
+  onSubmit: (password: string) => void;
+  onCancel: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  const inputRef = useState<HTMLInputElement | null>(null);
+
+  return (
+    <div className="modal-overlay" onClick={onCancel}>
+      <div className="modal" style={{ width: 380 }} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h2>Password Required</h2>
+          <button className="modal-close" onClick={onCancel}>x</button>
+        </div>
+        <div className="modal-body">
+          <p style={{ fontSize: 13, marginBottom: 12, color: "var(--text-secondary)" }}>
+            Enter password for <strong>{sessionName}</strong>
+          </p>
+          <div className="form-group">
+            <input
+              type="password"
+              autoFocus
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && password) onSubmit(password);
+                if (e.key === "Escape") onCancel();
+              }}
+              placeholder="Password"
+            />
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-primary" onClick={() => password && onSubmit(password)}>Connect</button>
+        </div>
+      </div>
     </div>
   );
 }

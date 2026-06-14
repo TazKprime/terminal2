@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   GlobalConfig,
   SessionProfile,
@@ -767,14 +768,22 @@ function ProfileEditor({
           </button>
           <button
             className="btn btn-primary"
-            onClick={() => {
+            onClick={async () => {
               const sessionToSave = { ...profile };
               if (
                 profile.connection.authMethod === "password" &&
                 profile.connection.passwordSaved &&
-                password
+                password &&
+                sessionToSave.id
               ) {
-                (window as any).__pendingPassword = password;
+                try {
+                  await invoke("save_session_password", {
+                    sessionId: sessionToSave.id,
+                    password,
+                  });
+                } catch (e) {
+                  console.error("Failed to save password:", e);
+                }
               }
               onSave(sessionToSave);
             }}
