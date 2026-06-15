@@ -33,6 +33,8 @@ export default function App() {
   const [editingSession, setEditingSession] = useState<SessionProfile | null>(null);
   const [editingTheme, setEditingTheme] = useState<ThemeProfile | null>(null);
   const [passwordPrompt, setPasswordPrompt] = useState<{ session: SessionProfile; resolve: (pw: string | null) => void } | null>(null);
+  const [broadcastMode, setBroadcastMode] = useState(false);
+  const [broadcastCommand, setBroadcastCommand] = useState("");
 
   useEffect(() => {
     loadData();
@@ -239,6 +241,24 @@ export default function App() {
     []
   );
 
+  const handleBroadcast = useCallback(
+    async (command: string) => {
+      if (!command.trim() || tabs.length === 0) return;
+      const bytes = new TextEncoder().encode(command + "\r");
+      for (const tab of tabs) {
+        try {
+          await invoke("write_to_connection", {
+            sessionId: tab.id,
+            data: Array.from(bytes),
+          });
+        } catch (e) {
+          console.error(`Broadcast to ${tab.id} failed:`, e);
+        }
+      }
+    },
+    [tabs]
+  );
+
   return (
     <div className="app-layout">
       <Sidebar
@@ -296,6 +316,33 @@ export default function App() {
                 </span>
               </div>
             ))}
+          </div>
+        )}
+        {tabs.length > 1 && (
+          <div className="broadcast-bar">
+            <button
+              className={`broadcast-toggle ${broadcastMode ? "active" : ""}`}
+              onClick={() => setBroadcastMode(!broadcastMode)}
+              title="Send command to all sessions"
+            >
+              {broadcastMode ? ">>>" : ">>"}
+            </button>
+            {broadcastMode && (
+              <input
+                type="text"
+                className="broadcast-input"
+                value={broadcastCommand}
+                onChange={(e) => setBroadcastCommand(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    handleBroadcast(broadcastCommand);
+                    setBroadcastCommand("");
+                  }
+                }}
+                placeholder="Command to send to all sessions..."
+                autoFocus
+              />
+            )}
           </div>
         )}
         <div className="terminal-container">

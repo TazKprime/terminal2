@@ -99,6 +99,46 @@ export default function TerminalTab({
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
 
+    const container = terminalRef.current;
+
+    term.onSelectionChange(() => {
+      const selection = term.getSelection();
+      if (selection) {
+        navigator.clipboard.writeText(selection).catch(() => {});
+      }
+    });
+
+    const handlePasteKey = (e: KeyboardEvent) => {
+      if (e.key === "Insert" || (e.ctrlKey && e.key === "v")) {
+        e.preventDefault();
+        e.stopPropagation();
+        navigator.clipboard.readText().then((text) => {
+          if (text && xtermRef.current) {
+            const bytes = new TextEncoder().encode(text);
+            invoke("write_to_connection", {
+              sessionId: tabId,
+              data: Array.from(bytes),
+            }).catch(() => {});
+          }
+        }).catch(() => {});
+      }
+    };
+    container.addEventListener("keydown", handlePasteKey, true);
+
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      navigator.clipboard.readText().then((text) => {
+        if (text && xtermRef.current) {
+          const bytes = new TextEncoder().encode(text);
+          invoke("write_to_connection", {
+            sessionId: tabId,
+            data: Array.from(bytes),
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+    };
+    container.addEventListener("contextmenu", handleContextMenu);
+
     term.onData((data) => {
       const encoder = new TextEncoder();
       const bytes = encoder.encode(data);
@@ -155,6 +195,8 @@ export default function TerminalTab({
 
     return () => {
       unlistenData.then((fn) => fn());
+      container.removeEventListener("contextmenu", handleContextMenu);
+      container.removeEventListener("keydown", handlePasteKey, true);
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("keydown", handleKeyDown);
       resizeObserver.disconnect();
