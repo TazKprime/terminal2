@@ -6,130 +6,6 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { SessionProfile, ThemeProfile } from "../types";
 
-function stripZmodemEscape(data: Uint8Array): Uint8Array {
-  const result: number[] = [];
-  let i = 0;
-  while (i < data.length) {
-    if (
-      i + 3 < data.length &&
-      data[i] === 0x2a &&
-      data[i + 1] === 0x2a &&
-      data[i + 2] === 0x18
-    ) {
-      i += 3;
-      while (i < data.length && data[i] >= 0x20 && data[i] <= 0x7e) {
-        i++;
-      }
-    } else {
-      result.push(data[i]);
-      i++;
-    }
-  }
-  return new Uint8Array(result);
-}
-
-async function handleZmodemReceive(
-  tabId: string,
-  terminal: Terminal,
-  data: Uint8Array
-): Promise<void> {
-  const Zmodem = await import("zmodem.js");
-
-  terminal.write("\r\n\x1b[33m[ZMODEM] File transfer detected...\x1b[0m\r\n");
-
-  return new Promise<void>((resolve) => {
-    let session: any = null;
-    let fileName = "received_file";
-    let fileSize = 0;
-    let fileData: number[] = [];
-    let savePath: string | null = null;
-    let firstChunk = true;
-
-    const sentry = new Zmodem.ZSentry({
-      on_header(header: any) {
-        const typeName = header.constructor.name;
-
-        if (typeName === "ZFile") {
-          fileName = header.get_fname();
-          fileSize = header.get_file_length() || 0;
-
-          terminal.write(
-            `\x1b[33m[ZMODEM] Receiving: ${fileName} (${fileSize} bytes)\x1b[0m\r\n`
-          );
-
-          invoke<string | null>("save_file_dialog", {
-            defaultPath: fileName,
-          }).then((path) => {
-            savePath = path;
-            if (!savePath) {
-              terminal.write("\x1b[31m[ZMODEM] Transfer cancelled by user\x1b[0m\r\n");
-              header.skip();
-              resolve();
-              return;
-            }
-
-            terminal.write(`\x1b[32m[ZMODEM] Saving to: ${savePath}\x1b[0m\r\n`);
-
-            header.accept().then((sessionRef: any) => {
-              session = sessionRef;
-            }).catch(() => {
-              resolve();
-            });
-          }).catch(() => {
-            header.skip();
-            resolve();
-          });
-        } else if (typeName === "ZRinit" || typeName === "ZEOF") {
-          if (typeName === "ZEOF" && savePath && fileData.length > 0) {
-            const bytes = new Uint8Array(fileData);
-            invoke("append_file", {
-              path: savePath,
-              data: Array.from(bytes),
-            }).then(() => {
-              terminal.write(
-                `\x1b[32m[ZMODEM] ${fileName} saved (${fileData.length} bytes)\x1b[0m\r\n`
-              );
-              fileData = [];
-              resolve();
-            }).catch((e: any) => {
-              terminal.write(`\x1b[31m[ZMODEM] Save error: ${e}\x1b[0m\r\n`);
-              resolve();
-            });
-          } else {
-            resolve();
-          }
-        }
-      },
-      on_raw(data: Uint8Array) {
-        if (firstChunk) {
-          firstChunk = false;
-          return;
-        }
-        terminal.write(stripZmodemEscape(data));
-      },
-    });
-
-    sentry.consume(data);
-
-    const dataDispose = listen(`data-${tabId}`, (event: any) => {
-      if (!event.payload?.data) return;
-      const incoming = new Uint8Array(event.payload.data);
-
-      try {
-        sentry.consume(incoming);
-      } catch (e) {
-        dataDispose.then((fn) => fn());
-        resolve();
-      }
-    });
-
-    setTimeout(() => {
-      dataDispose.then((fn) => fn());
-      resolve();
-    }, 30000);
-  });
-}
-
 interface TerminalTabProps {
   tabId: string;
   session: SessionProfile;
@@ -145,8 +21,7 @@ export default function TerminalTab({
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
-  const zmodemActive = useRef(false);
-  const zmodemPending = useRef<Uint8Array[]>([]);
+  const zmodemRef = useRef<any>(null);
 
   const getThemeColors = useCallback(() => {
     const theme = themes.find((t) => t.name === session.appearance.theme);
@@ -198,6 +73,13 @@ export default function TerminalTab({
     };
   }, [session.appearance, themes]);
 
+  const writeToConn = useCallback((data: number[]) => {
+    invoke("write_to_connection", {
+      sessionId: tabId,
+      data,
+    }).catch(() => {});
+  }, [tabId]);
+
   useEffect(() => {
     if (!terminalRef.current) return;
 
@@ -214,10 +96,8 @@ export default function TerminalTab({
 
     const fitAddon = new FitAddon();
     const searchAddon = new SearchAddon();
-
     term.loadAddon(fitAddon);
     term.loadAddon(searchAddon);
-
     term.open(terminalRef.current);
     fitAddon.fit();
 
@@ -228,10 +108,8 @@ export default function TerminalTab({
     const container = terminalRef.current;
 
     term.onSelectionChange(() => {
-      const selection = term.getSelection();
-      if (selection) {
-        navigator.clipboard.writeText(selection).catch(() => {});
-      }
+      const sel = term.getSelection();
+      if (sel) navigator.clipboard.writeText(sel).catch(() => {});
     });
 
     const handlePasteKey = (e: KeyboardEvent) => {
@@ -239,11 +117,10 @@ export default function TerminalTab({
         e.preventDefault();
         e.stopPropagation();
         navigator.clipboard.readText().then((text) => {
-          if (text && xtermRef.current) {
-            const bytes = new TextEncoder().encode(text);
+          if (text) {
             invoke("write_to_connection", {
               sessionId: tabId,
-              data: Array.from(bytes),
+              data: Array.from(new TextEncoder().encode(text)),
             }).catch(() => {});
           }
         }).catch(() => {});
@@ -254,11 +131,10 @@ export default function TerminalTab({
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       navigator.clipboard.readText().then((text) => {
-        if (text && xtermRef.current) {
-          const bytes = new TextEncoder().encode(text);
+        if (text) {
           invoke("write_to_connection", {
             sessionId: tabId,
-            data: Array.from(bytes),
+            data: Array.from(new TextEncoder().encode(text)),
           }).catch(() => {});
         }
       }).catch(() => {});
@@ -266,43 +142,28 @@ export default function TerminalTab({
     container.addEventListener("contextmenu", handleContextMenu);
 
     term.onData((data) => {
-      const encoder = new TextEncoder();
-      const bytes = encoder.encode(data);
       invoke("write_to_connection", {
         sessionId: tabId,
-        data: Array.from(bytes),
-      }).catch((e) => console.error("Write failed:", e));
-    });
-
-    term.onResize(({ cols, rows }) => {
-      invoke("resize_connection", {
-        sessionId: tabId,
-        cols,
-        rows,
+        data: Array.from(new TextEncoder().encode(data)),
       }).catch(() => {});
     });
 
-    const handleResize = () => {
-      try {
-        fitAddon.fit();
-      } catch (e) {
-        // ignore
-      }
-    };
+    term.onResize(({ cols, rows }) => {
+      invoke("resize_connection", { sessionId: tabId, cols, rows }).catch(() => {});
+    });
 
+    const handleResize = () => { try { fitAddon.fit(); } catch (_) {} };
     const resizeObserver = new ResizeObserver(handleResize);
-    resizeObserver.observe(terminalRef.current);
+    resizeObserver.observe(container);
     window.addEventListener("resize", handleResize);
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "f") {
         e.preventDefault();
-        const searchContainer = document.getElementById(`search-${tabId}`);
-        if (searchContainer) {
-          searchContainer.style.display =
-            searchContainer.style.display === "none" ? "flex" : "none";
-          const input = searchContainer?.querySelector("input");
-          if (input) input.focus();
+        const sc = document.getElementById(`search-${tabId}`);
+        if (sc) {
+          sc.style.display = sc.style.display === "none" ? "flex" : "none";
+          sc.querySelector("input")?.focus();
         }
       }
     };
@@ -312,33 +173,91 @@ export default function TerminalTab({
       if (!event.payload?.data) return;
       const bytes = new Uint8Array(event.payload.data);
 
-      if (zmodemActive.current) {
-        zmodemPending.current.push(bytes);
+      if (zmodemRef.current) {
+        try {
+          zmodemRef.current.consume(bytes);
+        } catch (e) {
+          term.write(bytes);
+        }
         return;
       }
 
-      const hasZmodem =
-        bytes.length >= 4 &&
-        ((bytes[0] === 0x2a && bytes[1] === 0x2a && bytes[2] === 0x18 && (bytes[3] === 0x42 || bytes[3] === 0x43 || bytes[3] === 0x44)) ||
-         (bytes.length > 4 && bytes[0] === 0x18 && bytes[1] === 0x42));
+      const hasZmodem = bytes.length >= 4 &&
+        bytes[0] === 0x2a && bytes[1] === 0x2a && bytes[2] === 0x18 &&
+        (bytes[3] === 0x42 || bytes[3] === 0x43 || bytes[3] === 0x44);
 
-      if (hasZmodem || (bytes[0] === 0x18 && bytes[1] === 0x42)) {
-        zmodemActive.current = true;
-        zmodemPending.current = [bytes];
-
-        handleZmodemReceive(tabId, term, bytes).finally(() => {
-          zmodemActive.current = false;
-          const pending = zmodemPending.current;
-          zmodemPending.current = [];
-          for (const chunk of pending) {
-            term.write(chunk);
-          }
-        });
+      if (hasZmodem) {
+        initZmodem(bytes, term);
         return;
       }
 
       term.write(bytes);
     });
+
+    async function initZmodem(initialData: Uint8Array, t: Terminal) {
+      const Zmodem = await import("zmodem.js");
+
+      t.write("\r\n\x1b[33m[ZMODEM] Transfer detected...\x1b[0m\r\n");
+
+      let activeSession: any = null;
+      let fileSaved = false;
+
+      const sentry = new Zmodem.ZSentry({
+        on_header(header: any) {
+          const typeName = header?.constructor?.name;
+
+          if (typeName === "ZFile") {
+            const fname = header.get_fname();
+            const fsize = header.get_file_length();
+            t.write(`\x1b[33m[ZMODEM] File: ${fname} (${fsize || "?"} bytes)\x1b[0m\r\n`);
+
+            const p = header.accept();
+            if (p && typeof p.then === "function") {
+              p.then((session: any) => {
+                activeSession = session;
+                t.write("\x1b[32m[ZMODEM] Accepted, waiting for data...\x1b[0m\r\n");
+              }).catch(() => {
+                t.write("\x1b[31m[ZMODEM] Session error\x1b[0m\r\n");
+                zmodemRef.current = null;
+              });
+            } else if (p && typeof p.on === "function") {
+              activeSession = p;
+            }
+            return;
+          }
+
+          if (typeName === "ZRinit") {
+            return;
+          }
+
+          if (typeName === "ZEOF") {
+            t.write("\x1b[32m[ZMODEM] Transfer complete.\x1b[0m\r\n");
+            zmodemRef.current = null;
+            return;
+          }
+
+          if (typeName === "ZFIN") {
+            t.write("\x1b[32m[ZMODEM] Finished.\x1b[0m\r\n");
+            zmodemRef.current = null;
+            return;
+          }
+        },
+        on_raw(data: Uint8Array) {
+          if (data.length > 0) {
+            t.write(data);
+          }
+        },
+      });
+
+      zmodemRef.current = sentry;
+
+      try {
+        sentry.consume(initialData);
+      } catch (e) {
+        t.write(`\x1b[31m[ZMODEM] Parse error: ${e}\x1b[0m\r\n`);
+        zmodemRef.current = null;
+      }
+    }
 
     return () => {
       unlistenData.then((fn) => fn());
@@ -395,17 +314,13 @@ export default function TerminalTab({
             }
             if (e.key === "Escape") {
               (e.target as HTMLInputElement).blur();
-              const container = document.getElementById(`search-${tabId}`);
-              if (container) container.style.display = "none";
+              const sc = document.getElementById(`search-${tabId}`);
+              if (sc) sc.style.display = "none";
             }
           }}
         />
-        <button className="icon-btn" onClick={() => handleSearch("prev")}>
-          ^
-        </button>
-        <button className="icon-btn" onClick={() => handleSearch("next")}>
-          v
-        </button>
+        <button className="icon-btn" onClick={() => handleSearch("prev")}>^</button>
+        <button className="icon-btn" onClick={() => handleSearch("next")}>v</button>
       </div>
       <div ref={terminalRef} className="terminal-wrapper" />
     </div>
