@@ -7,6 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 pub struct AppState {
     pub registry: Arc<Mutex<ConnectionRegistry>>,
+    pub zmodem_active: Arc<Mutex<Vec<String>>>,
 }
 
 fn get_app_dir(app: &AppHandle) -> PathBuf {
@@ -109,16 +110,21 @@ pub async fn connect_session(
         app_dir,
         password,
         state.registry.clone(),
+        state.zmodem_active.clone(),
     )
 }
 
 #[tauri::command]
 pub fn write_to_connection(
+    state: State<'_, AppState>,
     session_id: String,
     data: Vec<u8>,
-    state: State<'_, AppState>,
 ) -> Result<(), String> {
     eprintln!("[DEBUG] write_to_connection session={} bytes={}", session_id, data.len());
+    if state.zmodem_active.lock().unwrap().contains(&session_id) {
+        eprintln!("[ZMODEM] Blocked {} bytes from frontend during active ZMODEM", data.len());
+        return Ok(());
+    }
     connection::write_to_connection(&state.registry, &session_id, &data)
 }
 

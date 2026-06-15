@@ -15,11 +15,12 @@ use crate::commands::AppState;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let registry = Arc::new(Mutex::new(ConnectionRegistry::new()));
+    let zmodem_active = Arc::new(Mutex::new(Vec::new()));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .manage(AppState { registry })
+        .manage(AppState { registry, zmodem_active })
         .setup(|app| {
             let app_dir = app
                 .path()

@@ -66,6 +66,7 @@ pub fn start_connection(
     app_dir: PathBuf,
     password: Option<String>,
     registry: Arc<Mutex<ConnectionRegistry>>,
+    zmodem_active: Arc<Mutex<Vec<String>>>,
 ) -> Result<(), String> {
     let session_id = session.id.clone();
     let protocol = session.protocol.clone();
@@ -77,6 +78,7 @@ pub fn start_connection(
 
     let stop_flag = Arc::new(Mutex::new(false));
     let stop_flag_clone = stop_flag.clone();
+    let zmodem_active_clone = zmodem_active.clone();
 
     let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>();
 
@@ -109,6 +111,7 @@ pub fn start_connection(
                 password,
                 stop_flag_clone,
                 input_rx,
+                zmodem_active_clone,
             ),
             "telnet" => connect_telnet(
                 &app,
@@ -197,6 +200,7 @@ fn connect_ssh2(
     password: Option<String>,
     stop_flag: Arc<Mutex<bool>>,
     input_rx: mpsc::Receiver<Vec<u8>>,
+    zmodem_active: Arc<Mutex<Vec<String>>>,
 ) -> Result<(), String> {
     let addr = format!("{}:{}", conn.hostname, conn.port);
     eprintln!("[DEBUG] SSH connecting to {}", addr);
@@ -304,19 +308,11 @@ fn connect_ssh2(
 
     let mut buf = [0u8; 8192];
     let mut zmodem = ZmodemHandler::new();
+    let mut pending_input: Vec<u8> = Vec::new();
 
     loop {
         if let Ok(flag) = stop_flag.lock() {
             if *flag {
-                break;
-            }
-        }
-
-        let input = drain_input(&input_rx);
-        if !input.is_empty() {
-            eprintln!("[DEBUG] SSH writing {} bytes to channel", input.len());
-            if let Err(e) = channel.write_all(&input) {
-                eprintln!("[DEBUG] SSH write error: {}", e);
                 break;
             }
         }
@@ -339,8 +335,18 @@ fn connect_ssh2(
                 }
 
                 if zmodem.active || ZmodemHandler::is_zmodem(data) {
+                    let was_active = zmodem.active;
                     let action = zmodem.handle(data);
                     eprintln!("[ZMODEM] action handled");
+
+                    if zmodem.active && !was_active {
+                        if let Ok(mut list) = zmodem_active.lock() {
+                            list.push(session_id.to_string());
+                            eprintln!("[ZMODEM] Session {} marked as active ZMODEM", session_id);
+                        }
+                    }
+
+                    pending_input.clear();
 
                     match action {
                         ZmodemAction::SendToChannel(resp) => {
@@ -348,12 +354,14 @@ fn connect_ssh2(
                             if let Err(e) = channel.write_all(&resp) {
                                 eprintln!("[ZMODEM] write error: {}", e);
                             }
+                            let _ = channel.flush();
                         }
                         ZmodemAction::FileData(chunk) => {
                             zmodem.file_data.extend_from_slice(&chunk);
                         }
                         ZmodemAction::Finished(resp) => {
                             let _ = channel.write_all(&resp);
+                            let _ = channel.flush();
                             if !zmodem.file_data.is_empty() && !zmodem.file_name.is_empty() {
                                 let download_dir = app_dir.join("downloads");
                                 std::fs::create_dir_all(&download_dir).ok();
@@ -362,10 +370,27 @@ fn connect_ssh2(
                                 eprintln!("[ZMODEM] Saved {} bytes to {}", zmodem.file_data.len(), file_path.display());
                             }
                             zmodem.reset();
+                            if let Ok(mut list) = zmodem_active.lock() {
+                                list.retain(|id| id != session_id);
+                                eprintln!("[ZMODEM] Session {} marked as inactive ZMODEM", session_id);
+                            }
                         }
                         _ => {}
                     }
                     continue;
+                }
+
+                let input = drain_input(&input_rx);
+                if !input.is_empty() {
+                    pending_input.extend_from_slice(&input);
+                }
+                if !pending_input.is_empty() {
+                    eprintln!("[DEBUG] SSH writing {} bytes to channel", pending_input.len());
+                    if let Err(e) = channel.write_all(&pending_input) {
+                        eprintln!("[DEBUG] SSH write error: {}", e);
+                        break;
+                    }
+                    pending_input.clear();
                 }
 
                 if let Some(ref mut exec) = executor {
@@ -380,6 +405,10 @@ fn connect_ssh2(
                 );
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                let input = drain_input(&input_rx);
+                if !input.is_empty() {
+                    pending_input.extend_from_slice(&input);
+                }
                 thread::sleep(std::time::Duration::from_millis(10));
                 continue;
             }
