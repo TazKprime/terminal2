@@ -98,9 +98,18 @@ impl ZmodemHandler {
     }
 
     fn crc16(data: &[u8]) -> u16 {
+        let table: [u16; 256] = Self::build_crc_table();
         let mut crc: u16 = 0;
         for &byte in data {
-            crc ^= (byte as u16) << 8;
+            crc = table[((crc >> 8) ^ byte as u16) as usize] ^ (crc << 8);
+        }
+        crc
+    }
+
+    fn build_crc_table() -> [u16; 256] {
+        let mut table = [0u16; 256];
+        for i in 0..256u16 {
+            let mut crc = i << 8;
             for _ in 0..8 {
                 if crc & 0x8000 != 0 {
                     crc = (crc << 1) ^ 0x1021;
@@ -108,8 +117,9 @@ impl ZmodemHandler {
                     crc <<= 1;
                 }
             }
+            table[i as usize] = crc;
         }
-        crc
+        table
     }
 
     fn make_header(frame_type: u8, payload: [u8; 3]) -> Vec<u8> {
