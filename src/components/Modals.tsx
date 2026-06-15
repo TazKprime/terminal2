@@ -138,7 +138,7 @@ function ProfileEditor({
   onClose,
 }: {
   session: SessionProfile | null;
-  onSave: (session: SessionProfile) => void;
+  onSave: (session: SessionProfile, password?: string) => void;
   onClose: () => void;
 }) {
   const [profile, setProfile] = useState<SessionProfile>(
@@ -768,24 +768,8 @@ function ProfileEditor({
           </button>
           <button
             className="btn btn-primary"
-            onClick={async () => {
-              const sessionToSave = { ...profile };
-              if (
-                profile.connection.authMethod === "password" &&
-                profile.connection.passwordSaved &&
-                password &&
-                sessionToSave.id
-              ) {
-                try {
-                  await invoke("save_session_password", {
-                    sessionId: sessionToSave.id,
-                    password,
-                  });
-                } catch (e) {
-                  console.error("Failed to save password:", e);
-                }
-              }
-              onSave(sessionToSave);
+            onClick={() => {
+              onSave({ ...profile }, password || undefined);
             }}
           >
             Save

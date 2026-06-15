@@ -31,6 +31,7 @@ fn save_store(app_dir: &Path, store: &CredentialStore) -> Result<(), String> {
 }
 
 pub fn save_password(app_dir: &Path, session_id: &str, password: &str) -> Result<(), String> {
+    eprintln!("[DEBUG] save_password: session={} pw_len={} app_dir={}", session_id, password.len(), app_dir.display());
     let mut store = load_store(app_dir)?;
     store
         .credentials

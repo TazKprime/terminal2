@@ -143,8 +143,9 @@ export default function App() {
   );
 
   const handleSaveSession = useCallback(
-    async (session: SessionProfile) => {
+    async (session: SessionProfile, password?: string) => {
       try {
+        let savedSession = session;
         if (session.id) {
           await invoke("save_session_profile", { session });
         } else {
@@ -153,6 +154,7 @@ export default function App() {
             id: `sess-${Date.now()}`,
           };
           await invoke("save_session_profile", { session: newSession });
+          savedSession = newSession;
 
           const newFolders = { ...folders };
           const folderPath = newSession.folder || "Unsorted";
@@ -168,6 +170,18 @@ export default function App() {
           await invoke("set_folders", { folders: newFolders });
           setFolders(newFolders);
         }
+
+        if (
+          password &&
+          savedSession.connection.authMethod === "password" &&
+          savedSession.connection.passwordSaved
+        ) {
+          await invoke("save_session_password", {
+            sessionId: savedSession.id,
+            password,
+          });
+        }
+
         await loadData();
       } catch (e) {
         console.error("Save failed:", e);
@@ -327,8 +341,8 @@ export default function App() {
       {modal === "profileEditor" && (
         <Modals.ProfileEditor
           session={editingSession}
-          onSave={(session) => {
-            handleSaveSession(session);
+          onSave={(session, password) => {
+            handleSaveSession(session, password);
             setModal(null);
             setEditingSession(null);
           }}
