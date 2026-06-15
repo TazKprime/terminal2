@@ -409,6 +409,14 @@ fn connect_ssh2(
                 if !input.is_empty() {
                     pending_input.extend_from_slice(&input);
                 }
+                if !zmodem.active && !pending_input.is_empty() {
+                    eprintln!("[DEBUG] SSH writing {} bytes to channel", pending_input.len());
+                    if let Err(e) = channel.write_all(&pending_input) {
+                        eprintln!("[DEBUG] SSH write error: {}", e);
+                        break;
+                    }
+                    pending_input.clear();
+                }
                 thread::sleep(std::time::Duration::from_millis(10));
                 continue;
             }
