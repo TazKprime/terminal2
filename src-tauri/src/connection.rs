@@ -2,6 +2,7 @@ use crate::config::*;
 use crate::credentials;
 use crate::logging;
 use crate::scripting::{self, ScriptExecutor};
+use crate::zmodem::{ZmodemHandler, ZmodemAction};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -302,6 +303,8 @@ fn connect_ssh2(
     }
 
     let mut buf = [0u8; 8192];
+    let mut zmodem = ZmodemHandler::new();
+
     loop {
         if let Ok(flag) = stop_flag.lock() {
             if *flag {
@@ -333,6 +336,43 @@ fn connect_ssh2(
                         log_config.append,
                         data,
                     );
+                }
+
+                if zmodem.active || ZmodemHandler::is_zmodem_start(data) {
+                    let save_path = app_dir.join("downloads").to_string_lossy().to_string();
+                    let action = zmodem.handle_data(data, Some(save_path));
+
+                    match action {
+                        ZmodemAction::SendData(resp) => {
+                            let _ = channel.write_all(&resp);
+                        }
+                        ZmodemAction::FileData(chunk) => {
+                            zmodem.file_data.extend_from_slice(&chunk);
+                        }
+                        ZmodemAction::Finished(resp) => {
+                            let _ = channel.write_all(&resp);
+                            if !zmodem.file_data.is_empty() && !zmodem.file_name.is_empty() {
+                                let download_dir = app_dir.join("downloads");
+                                std::fs::create_dir_all(&download_dir).ok();
+                                let file_path = download_dir.join(&zmodem.file_name);
+                                let _ = std::fs::write(&file_path, &zmodem.file_data);
+                                eprintln!("[ZMODEM] Saved {} bytes to {}", zmodem.file_data.len(), file_path.display());
+                                let _ = app.emit(
+                                    &format!("data-{}", session_id),
+                                    serde_json::json!({ "data": format!("[ZMODEM] Saved: {} ({} bytes)\r\n", zmodem.file_name, zmodem.file_data.len()) }),
+                                );
+                            }
+                            zmodem.reset();
+                        }
+                        ZmodemAction::NeedSavePath(name) => {
+                            let _ = app.emit(
+                                &format!("data-{}", session_id),
+                                serde_json::json!({ "data": format!("[ZMODEM] Receiving: {}\r\n", name) }),
+                            );
+                        }
+                        _ => {}
+                    }
+                    continue;
                 }
 
                 if let Some(ref mut exec) = executor {

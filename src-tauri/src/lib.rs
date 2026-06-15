@@ -4,6 +4,7 @@ mod connection;
 mod credentials;
 mod logging;
 mod scripting;
+mod zmodem;
 
 use connection::ConnectionRegistry;
 use std::sync::{Arc, Mutex};
