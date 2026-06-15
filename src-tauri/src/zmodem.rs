@@ -112,13 +112,13 @@ impl ZmodemHandler {
         crc
     }
 
-    fn make_header(frame_type: u8, payload: [u8; 4]) -> Vec<u8> {
-        let mut frame_bytes = Vec::with_capacity(5);
+    fn make_header(frame_type: u8, payload: [u8; 3]) -> Vec<u8> {
+        let mut frame_bytes = Vec::with_capacity(4);
         frame_bytes.push(frame_type);
         frame_bytes.extend_from_slice(&payload);
         let crc = Self::crc16(&frame_bytes);
 
-        let mut out = Vec::with_capacity(20);
+        let mut out = Vec::with_capacity(18);
         out.extend_from_slice(&[ZPAD, ZPAD, ZDLE, b'B']);
 
         for &b in &frame_bytes {
@@ -141,7 +141,7 @@ impl ZmodemHandler {
             if Self::is_zmodem(data) {
                 self.active = true;
                 eprintln!("[ZMODEM] Detected start in {} bytes", data.len());
-                let resp = Self::make_header(ZRINIT, [0, 0, 0, 0]);
+                let resp = Self::make_header(ZRINIT, [0, 0, 0]);
                 eprintln!("[ZMODEM] -> ZRINIT ({} bytes): {:?}", resp.len(), &resp[..16]);
                 return ZmodemAction::SendToChannel(resp);
             }
@@ -153,38 +153,38 @@ impl ZmodemHandler {
             match frame_type {
                 ZRQINIT => {
                     self.phase = Phase::WaitFile;
-                    let resp = Self::make_header(ZRINIT, [0, 0, 0, 0]);
+                    let resp = Self::make_header(ZRINIT, [0, 0, 0]);
                     return ZmodemAction::SendToChannel(resp);
                 }
                 ZFILE => {
                     self.phase = Phase::Receiving;
                     return ZmodemAction::SendToChannel(
-                        Self::make_header(ZRPOS, [0, 0, 0, 0])
+                        Self::make_header(ZRPOS, [0, 0, 0])
                     );
                 }
                 ZDATA => {
                     return ZmodemAction::SendToChannel(
-                        Self::make_header(ZACK, [0, 0, 0, 0])
+                        Self::make_header(ZACK, [0, 0, 0])
                     );
                 }
                 ZEOF => {
                     self.phase = Phase::Done;
-                    let resp = Self::make_header(ZRINIT, [0, 0, 0, 0]);
+                    let resp = Self::make_header(ZRINIT, [0, 0, 0]);
                     return ZmodemAction::SendToChannel(resp);
                 }
                 ZFIN => {
-                    let resp = Self::make_header(ZFIN, [0, 0, 0, 0]);
+                    let resp = Self::make_header(ZFIN, [0, 0, 0]);
                     self.reset();
                     return ZmodemAction::Finished(resp);
                 }
                 ZNAK => {
                     return ZmodemAction::SendToChannel(
-                        Self::make_header(ZRINIT, [0, 0, 0, 0])
+                        Self::make_header(ZRINIT, [0, 0, 0])
                     );
                 }
                 _ => {
                     return ZmodemAction::SendToChannel(
-                        Self::make_header(ZACK, [0, 0, 0, 0])
+                        Self::make_header(ZACK, [0, 0, 0])
                     );
                 }
             }
