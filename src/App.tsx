@@ -318,33 +318,6 @@ export default function App() {
             ))}
           </div>
         )}
-        {tabs.length > 1 && (
-          <div className="broadcast-bar">
-            <button
-              className={`broadcast-toggle ${broadcastMode ? "active" : ""}`}
-              onClick={() => setBroadcastMode(!broadcastMode)}
-              title="Send command to all sessions"
-            >
-              {broadcastMode ? ">>>" : ">>"}
-            </button>
-            {broadcastMode && (
-              <input
-                type="text"
-                className="broadcast-input"
-                value={broadcastCommand}
-                onChange={(e) => setBroadcastCommand(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    handleBroadcast(broadcastCommand);
-                    setBroadcastCommand("");
-                  }
-                }}
-                placeholder="Command to send to all sessions..."
-                autoFocus
-              />
-            )}
-          </div>
-        )}
         <div className="terminal-container">
           {tabs.length === 0 ? (
             <div className="empty-state">
@@ -373,6 +346,34 @@ export default function App() {
             ))
           )}
         </div>
+        {tabs.length > 1 && (
+          <div className="broadcast-bar">
+            <button
+              className={`broadcast-toggle ${broadcastMode ? "active" : ""}`}
+              onClick={() => setBroadcastMode(!broadcastMode)}
+              title="Send command to all sessions"
+            >
+              {broadcastMode ? ">>>" : ">>"}
+            </button>
+            {broadcastMode && (
+              <textarea
+                className="broadcast-input"
+                value={broadcastCommand}
+                onChange={(e) => setBroadcastCommand(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    handleBroadcast(broadcastCommand);
+                    setBroadcastCommand("");
+                  }
+                }}
+                placeholder="Command to send to all sessions... (Enter to send, Shift+Enter for newline)"
+                autoFocus
+                rows={1}
+              />
+            )}
+          </div>
+        )}
       </div>
 
       {modal === "quickConnect" && (

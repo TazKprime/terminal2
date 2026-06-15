@@ -247,6 +247,7 @@ body {
   flex: 1;
   overflow: hidden;
   position: relative;
+  min-height: 0;
 }
 
 .terminal-wrapper {
@@ -548,11 +549,11 @@ body {
 
 .broadcast-bar {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 6px;
-  padding: 4px 8px;
+  padding: 6px 8px;
   background: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
 }
 
 .broadcast-toggle {
@@ -565,6 +566,7 @@ body {
   color: var(--text-secondary);
   cursor: pointer;
   white-space: nowrap;
+  align-self: flex-end;
 }
 
 .broadcast-toggle.active {
@@ -575,7 +577,7 @@ body {
 
 .broadcast-input {
   flex: 1;
-  padding: 4px 8px;
+  padding: 6px 8px;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -583,6 +585,10 @@ body {
   font-size: 12px;
   font-family: monospace;
   outline: none;
+  resize: vertical;
+  min-height: 28px;
+  max-height: 200px;
+  line-height: 1.4;
 }
 
 .broadcast-input:focus {
