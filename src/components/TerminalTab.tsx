@@ -6,120 +6,127 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { SessionProfile, ThemeProfile } from "../types";
 
-const ZMODEM_SEQUENCE = new Uint8Array([0x2a, 0x2a, 0x18, 0x42]); // **\x18B
-
-function hasZmodemSequence(data: Uint8Array): boolean {
-  for (let i = 0; i <= data.length - 4; i++) {
+function stripZmodemEscape(data: Uint8Array): Uint8Array {
+  const result: number[] = [];
+  let i = 0;
+  while (i < data.length) {
     if (
+      i + 3 < data.length &&
       data[i] === 0x2a &&
       data[i + 1] === 0x2a &&
-      data[i + 2] === 0x18 &&
-      data[i + 3] === 0x42
+      data[i + 2] === 0x18
     ) {
-      return true;
+      i += 3;
+      while (i < data.length && data[i] >= 0x20 && data[i] <= 0x7e) {
+        i++;
+      }
+    } else {
+      result.push(data[i]);
+      i++;
     }
   }
-  return false;
+  return new Uint8Array(result);
 }
 
 async function handleZmodemReceive(
   tabId: string,
-  terminal: Terminal
+  terminal: Terminal,
+  data: Uint8Array
 ): Promise<void> {
-  const { ZSentry, ZmodemBrowser } = await import("zmodem.js");
+  const Zmodem = await import("zmodem.js");
 
-  terminal.write("\r\n[ZMODEM] Receiving file...\r\n");
+  terminal.write("\r\n\x1b[33m[ZMODEM] File transfer detected...\x1b[0m\r\n");
 
-  return new Promise((resolve) => {
-    let activeSession: any = null;
+  return new Promise<void>((resolve) => {
+    let session: any = null;
+    let fileName = "received_file";
+    let fileSize = 0;
+    let fileData: number[] = [];
+    let savePath: string | null = null;
+    let firstChunk = true;
 
-    const sentry = new ZSentry({
+    const sentry = new Zmodem.ZSentry({
       on_header(header: any) {
-        if (header.constructor.name === "ZFile") {
-          const fname = header.get_fname();
-          const fsize = header.get_file_length();
+        const typeName = header.constructor.name;
+
+        if (typeName === "ZFile") {
+          fileName = header.get_fname();
+          fileSize = header.get_file_length() || 0;
 
           terminal.write(
-            `\r\n[ZMODEM] File: ${fname} (${fsize} bytes)\r\n`
+            `\x1b[33m[ZMODEM] Receiving: ${fileName} (${fileSize} bytes)\x1b[0m\r\n`
           );
 
-          const savePathPromise = invoke<string>("save_file_dialog", {
-            defaultPath: fname,
-          }).catch(() => null);
-
-          savePathPromise.then((savePath) => {
+          invoke<string | null>("save_file_dialog", {
+            defaultPath: fileName,
+          }).then((path) => {
+            savePath = path;
             if (!savePath) {
-              terminal.write("[ZMODEM] Transfer cancelled.\r\n");
-              if (activeSession) {
-                activeSession.close();
-              }
+              terminal.write("\x1b[31m[ZMODEM] Transfer cancelled by user\x1b[0m\r\n");
+              header.skip();
               resolve();
               return;
             }
 
-            const session = ZmodemBrowser.receive(
-              [
-                {
-                  on_header(h: any) {
-                    header = h;
-                  },
-                },
-              ],
-              {
-                on_input(data: Uint8Array) {
-                  invoke("append_file", {
-                    path: savePath,
-                    data: Array.from(data),
-                  }).catch(() => {});
-                },
-              }
-            );
+            terminal.write(`\x1b[32m[ZMODEM] Saving to: ${savePath}\x1b[0m\r\n`);
 
-            activeSession = session;
-
-            const check = header.check;
-            if (check) {
-              activeSession.file_length = header.get_file_length();
-              activeSession.fname = header.get_fname();
-            }
-
-            terminal.write(
-              `[ZMODEM] Saving to ${savePath}...\r\n`
-            );
-
-            invoke("write_to_connection", {
-              sessionId: tabId,
-              data: Array.from(new Uint8Array([0x06])), // ACK
-            }).catch(() => {});
+            header.accept().then((sessionRef: any) => {
+              session = sessionRef;
+            }).catch(() => {
+              resolve();
+            });
+          }).catch(() => {
+            header.skip();
+            resolve();
           });
-        } else {
-          terminal.write("[ZMODEM] Transfer complete.\r\n");
-          resolve();
-        }
-      },
-
-      on_raw(data: Uint8Array) {
-        const stripped = new Uint8Array(data.length);
-        let j = 0;
-        for (let i = 0; i < data.length; i++) {
-          if (data[i] !== 0x18) {
-            stripped[j++] = data[i];
+        } else if (typeName === "ZRinit" || typeName === "ZEOF") {
+          if (typeName === "ZEOF" && savePath && fileData.length > 0) {
+            const bytes = new Uint8Array(fileData);
+            invoke("append_file", {
+              path: savePath,
+              data: Array.from(bytes),
+            }).then(() => {
+              terminal.write(
+                `\x1b[32m[ZMODEM] ${fileName} saved (${fileData.length} bytes)\x1b[0m\r\n`
+              );
+              fileData = [];
+              resolve();
+            }).catch((e: any) => {
+              terminal.write(`\x1b[31m[ZMODEM] Save error: ${e}\x1b[0m\r\n`);
+              resolve();
+            });
+          } else {
+            resolve();
           }
         }
-        terminal.write(stripped.slice(0, j));
+      },
+      on_raw(data: Uint8Array) {
+        if (firstChunk) {
+          firstChunk = false;
+          return;
+        }
+        terminal.write(stripZmodemEscape(data));
       },
     });
 
-    const disposeData = terminal.onData((data) => {
-      const bytes = new TextEncoder().encode(data);
+    sentry.consume(data);
+
+    const dataDispose = listen(`data-${tabId}`, (event: any) => {
+      if (!event.payload?.data) return;
+      const incoming = new Uint8Array(event.payload.data);
+
       try {
-        sentry.consume(bytes);
+        sentry.consume(incoming);
       } catch (e) {
-        disposeData.dispose();
-        terminal.write("\r\n[ZMODEM] Error: " + String(e) + "\r\n");
+        dataDispose.then((fn) => fn());
         resolve();
       }
     });
+
+    setTimeout(() => {
+      dataDispose.then((fn) => fn());
+      resolve();
+    }, 30000);
   });
 }
 
@@ -139,6 +146,7 @@ export default function TerminalTab({
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const zmodemActive = useRef(false);
+  const zmodemPending = useRef<Uint8Array[]>([]);
 
   const getThemeColors = useCallback(() => {
     const theme = themes.find((t) => t.name === session.appearance.theme);
@@ -301,21 +309,35 @@ export default function TerminalTab({
     window.addEventListener("keydown", handleKeyDown);
 
     const unlistenData = listen(`data-${tabId}`, (event: any) => {
-      if (event.payload?.data) {
-        const bytes = new Uint8Array(event.payload.data);
+      if (!event.payload?.data) return;
+      const bytes = new Uint8Array(event.payload.data);
 
-        if (!zmodemActive.current && hasZmodemSequence(bytes)) {
-          zmodemActive.current = true;
-          handleZmodemReceive(tabId, term).finally(() => {
-            zmodemActive.current = false;
-          });
-          return;
-        }
-
-        if (xtermRef.current) {
-          xtermRef.current.write(bytes);
-        }
+      if (zmodemActive.current) {
+        zmodemPending.current.push(bytes);
+        return;
       }
+
+      const hasZmodem =
+        bytes.length >= 4 &&
+        ((bytes[0] === 0x2a && bytes[1] === 0x2a && bytes[2] === 0x18 && (bytes[3] === 0x42 || bytes[3] === 0x43 || bytes[3] === 0x44)) ||
+         (bytes.length > 4 && bytes[0] === 0x18 && bytes[1] === 0x42));
+
+      if (hasZmodem || (bytes[0] === 0x18 && bytes[1] === 0x42)) {
+        zmodemActive.current = true;
+        zmodemPending.current = [bytes];
+
+        handleZmodemReceive(tabId, term, bytes).finally(() => {
+          zmodemActive.current = false;
+          const pending = zmodemPending.current;
+          zmodemPending.current = [];
+          for (const chunk of pending) {
+            term.write(chunk);
+          }
+        });
+        return;
+      }
+
+      term.write(bytes);
     });
 
     return () => {
