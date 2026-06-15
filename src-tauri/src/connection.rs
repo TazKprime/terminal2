@@ -338,14 +338,16 @@ fn connect_ssh2(
                     );
                 }
 
-                if zmodem.active || ZmodemHandler::is_zmodem_start(data) {
-                    let save_path = app_dir.join("downloads").to_string_lossy().to_string();
-                    let action = zmodem.handle_data(data, Some(save_path));
-                    eprintln!("[ZMODEM] action={:?}", std::mem::discriminant(&action));
+                if zmodem.active || ZmodemHandler::is_zmodem(data) {
+                    let action = zmodem.handle(data);
+                    eprintln!("[ZMODEM] action handled");
 
                     match action {
-                        ZmodemAction::SendData(resp) => {
-                            let _ = channel.write_all(&resp);
+                        ZmodemAction::SendToChannel(resp) => {
+                            eprintln!("[ZMODEM] -> writing {} bytes to channel", resp.len());
+                            if let Err(e) = channel.write_all(&resp) {
+                                eprintln!("[ZMODEM] write error: {}", e);
+                            }
                         }
                         ZmodemAction::FileData(chunk) => {
                             zmodem.file_data.extend_from_slice(&chunk);
@@ -358,18 +360,8 @@ fn connect_ssh2(
                                 let file_path = download_dir.join(&zmodem.file_name);
                                 let _ = std::fs::write(&file_path, &zmodem.file_data);
                                 eprintln!("[ZMODEM] Saved {} bytes to {}", zmodem.file_data.len(), file_path.display());
-                                let _ = app.emit(
-                                    &format!("data-{}", session_id),
-                                    serde_json::json!({ "data": format!("[ZMODEM] Saved: {} ({} bytes)\r\n", zmodem.file_name, zmodem.file_data.len()) }),
-                                );
                             }
                             zmodem.reset();
-                        }
-                        ZmodemAction::NeedSavePath(name) => {
-                            let _ = app.emit(
-                                &format!("data-{}", session_id),
-                                serde_json::json!({ "data": format!("[ZMODEM] Receiving: {}\r\n", name) }),
-                            );
                         }
                         _ => {}
                     }
