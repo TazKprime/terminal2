@@ -6,6 +6,123 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { SessionProfile, ThemeProfile } from "../types";
 
+const ZMODEM_SEQUENCE = new Uint8Array([0x2a, 0x2a, 0x18, 0x42]); // **\x18B
+
+function hasZmodemSequence(data: Uint8Array): boolean {
+  for (let i = 0; i <= data.length - 4; i++) {
+    if (
+      data[i] === 0x2a &&
+      data[i + 1] === 0x2a &&
+      data[i + 2] === 0x18 &&
+      data[i + 3] === 0x42
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function handleZmodemReceive(
+  tabId: string,
+  terminal: Terminal
+): Promise<void> {
+  const { ZSentry, ZmodemBrowser } = await import("zmodem.js");
+
+  terminal.write("\r\n[ZMODEM] Receiving file...\r\n");
+
+  return new Promise((resolve) => {
+    let activeSession: any = null;
+
+    const sentry = new ZSentry({
+      on_header(header: any) {
+        if (header.constructor.name === "ZFile") {
+          const fname = header.get_fname();
+          const fsize = header.get_file_length();
+
+          terminal.write(
+            `\r\n[ZMODEM] File: ${fname} (${fsize} bytes)\r\n`
+          );
+
+          const savePathPromise = invoke<string>("save_file_dialog", {
+            defaultPath: fname,
+          }).catch(() => null);
+
+          savePathPromise.then((savePath) => {
+            if (!savePath) {
+              terminal.write("[ZMODEM] Transfer cancelled.\r\n");
+              if (activeSession) {
+                activeSession.close();
+              }
+              resolve();
+              return;
+            }
+
+            const session = ZmodemBrowser.receive(
+              [
+                {
+                  on_header(h: any) {
+                    header = h;
+                  },
+                },
+              ],
+              {
+                on_input(data: Uint8Array) {
+                  invoke("append_file", {
+                    path: savePath,
+                    data: Array.from(data),
+                  }).catch(() => {});
+                },
+              }
+            );
+
+            activeSession = session;
+
+            const check = header.check;
+            if (check) {
+              activeSession.file_length = header.get_file_length();
+              activeSession.fname = header.get_fname();
+            }
+
+            terminal.write(
+              `[ZMODEM] Saving to ${savePath}...\r\n`
+            );
+
+            invoke("write_to_connection", {
+              sessionId: tabId,
+              data: Array.from(new Uint8Array([0x06])), // ACK
+            }).catch(() => {});
+          });
+        } else {
+          terminal.write("[ZMODEM] Transfer complete.\r\n");
+          resolve();
+        }
+      },
+
+      on_raw(data: Uint8Array) {
+        const stripped = new Uint8Array(data.length);
+        let j = 0;
+        for (let i = 0; i < data.length; i++) {
+          if (data[i] !== 0x18) {
+            stripped[j++] = data[i];
+          }
+        }
+        terminal.write(stripped.slice(0, j));
+      },
+    });
+
+    const disposeData = terminal.onData((data) => {
+      const bytes = new TextEncoder().encode(data);
+      try {
+        sentry.consume(bytes);
+      } catch (e) {
+        disposeData.dispose();
+        terminal.write("\r\n[ZMODEM] Error: " + String(e) + "\r\n");
+        resolve();
+      }
+    });
+  });
+}
+
 interface TerminalTabProps {
   tabId: string;
   session: SessionProfile;
@@ -21,6 +138,7 @@ export default function TerminalTab({
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
+  const zmodemActive = useRef(false);
 
   const getThemeColors = useCallback(() => {
     const theme = themes.find((t) => t.name === session.appearance.theme);
@@ -142,11 +260,10 @@ export default function TerminalTab({
     term.onData((data) => {
       const encoder = new TextEncoder();
       const bytes = encoder.encode(data);
-      console.error(`[DEBUG] TerminalTab onData: ${bytes.length} bytes, tabId=${tabId}`);
       invoke("write_to_connection", {
         sessionId: tabId,
         data: Array.from(bytes),
-      }).catch((e) => console.error("[DEBUG] Write failed:", e));
+      }).catch((e) => console.error("Write failed:", e));
     });
 
     term.onResize(({ cols, rows }) => {
@@ -186,7 +303,15 @@ export default function TerminalTab({
     const unlistenData = listen(`data-${tabId}`, (event: any) => {
       if (event.payload?.data) {
         const bytes = new Uint8Array(event.payload.data);
-        console.error(`[DEBUG] TerminalTab data event: ${bytes.length} bytes, xterm=${!!xtermRef.current}`);
+
+        if (!zmodemActive.current && hasZmodemSequence(bytes)) {
+          zmodemActive.current = true;
+          handleZmodemReceive(tabId, term).finally(() => {
+            zmodemActive.current = false;
+          });
+          return;
+        }
+
         if (xtermRef.current) {
           xtermRef.current.write(bytes);
         }

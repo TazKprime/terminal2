@@ -44,6 +44,8 @@ pub fn run() {
             commands::write_to_connection,
             commands::resize_connection,
             commands::disconnect_session,
+            commands::save_file_dialog,
+            commands::append_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

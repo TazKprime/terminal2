@@ -132,6 +132,22 @@ pub fn resize_connection(
 }
 
 #[tauri::command]
+pub async fn save_file_dialog(app: AppHandle, default_path: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let result = app.dialog().file().add_filter("All Files", &["*"]).set_file_name(&default_path).blocking_pick_file();
+    Ok(result.map(|p| p.to_string()))
+}
+
+#[tauri::command]
+pub fn append_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    let mut file = OpenOptions::new().create(true).append(true).open(&path)
+        .map_err(|e| format!("Failed to open file: {}", e))?;
+    file.write_all(&data).map_err(|e| format!("Failed to write: {}", e))
+}
+
+#[tauri::command]
 pub fn disconnect_session(
     app: AppHandle,
     session_id: String,
