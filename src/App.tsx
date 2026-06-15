@@ -88,7 +88,8 @@ export default function App() {
       if (
         !effectivePassword &&
         session.protocol === "ssh2" &&
-        session.connection.authMethod === "password"
+        session.connection.authMethod === "password" &&
+        !session.connection.passwordSaved
       ) {
         effectivePassword = await promptPassword(session);
         if (effectivePassword === null) return;
