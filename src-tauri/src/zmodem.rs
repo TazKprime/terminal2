@@ -155,7 +155,7 @@ impl ZmodemHandler {
                     eprintln!("[ZMODEM] frame=0x{:02x} (initial)", frame_type);
                     match frame_type {
                         ZRQINIT | ZNAK => {
-                            let resp = Self::make_header(ZRINIT, [0x01, 0, 0]);
+                            let resp = Self::make_header(ZRINIT, [0, 0, 0]);
                             eprintln!("[ZMODEM] -> ZRINIT ({} bytes): {:?}", resp.len(), &resp[..16]);
                             return ZmodemAction::SendToChannel(resp);
                         }
@@ -171,7 +171,7 @@ impl ZmodemHandler {
             match frame_type {
                 ZRQINIT => {
                     self.phase = Phase::WaitFile;
-                    let resp = Self::make_header(ZRINIT, [0x01, 0, 0]);
+                    let resp = Self::make_header(ZRINIT, [0, 0, 0]);
                     return ZmodemAction::SendToChannel(resp);
                 }
                 ZFILE => {
@@ -187,7 +187,7 @@ impl ZmodemHandler {
                 }
                 ZEOF => {
                     self.phase = Phase::Done;
-                    let resp = Self::make_header(ZRINIT, [0x01, 0, 0]);
+                    let resp = Self::make_header(ZRINIT, [0, 0, 0]);
                     return ZmodemAction::SendToChannel(resp);
                 }
                 ZFIN => {
@@ -197,7 +197,7 @@ impl ZmodemHandler {
                 }
                 ZNAK => {
                     return ZmodemAction::SendToChannel(
-                        Self::make_header(ZRINIT, [0x01, 0, 0])
+                        Self::make_header(ZRINIT, [0, 0, 0])
                     );
                 }
                 _ => {

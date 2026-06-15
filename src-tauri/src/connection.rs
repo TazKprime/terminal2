@@ -309,6 +309,7 @@ fn connect_ssh2(
     let mut buf = [0u8; 8192];
     let mut zmodem = ZmodemHandler::new();
     let mut pending_input: Vec<u8> = Vec::new();
+    let mut wouldblock_count: u32 = 0;
 
     loop {
         if let Ok(flag) = stop_flag.lock() {
@@ -320,6 +321,7 @@ fn connect_ssh2(
         match channel.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
+                wouldblock_count = 0;
                 let data = &buf[..n];
 
                 if log_config.enabled {
@@ -355,6 +357,7 @@ fn connect_ssh2(
                                 eprintln!("[ZMODEM] write error: {}", e);
                             }
                             let _ = channel.flush();
+                            thread::sleep(std::time::Duration::from_millis(50));
                         }
                         ZmodemAction::FileData(chunk) => {
                             zmodem.file_data.extend_from_slice(&chunk);
@@ -409,13 +412,15 @@ fn connect_ssh2(
                 if !input.is_empty() {
                     pending_input.extend_from_slice(&input);
                 }
-                if !zmodem.active && !pending_input.is_empty() {
+                wouldblock_count += 1;
+                if !zmodem.active && !pending_input.is_empty() && wouldblock_count >= 3 {
                     eprintln!("[DEBUG] SSH writing {} bytes to channel", pending_input.len());
                     if let Err(e) = channel.write_all(&pending_input) {
                         eprintln!("[DEBUG] SSH write error: {}", e);
                         break;
                     }
                     pending_input.clear();
+                    wouldblock_count = 0;
                 }
                 thread::sleep(std::time::Duration::from_millis(10));
                 continue;
