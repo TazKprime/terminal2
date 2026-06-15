@@ -91,17 +91,24 @@ impl ZmodemHandler {
     }
 
     fn parse_header(data: &[u8]) -> Option<(u8, Vec<u8>)> {
-        let header_start = if data.len() > 3 && data[2] == ZDLE { 3 } else { 0 };
-        let hex_start = header_start + 1;
-
-        if data.len() < hex_start + 16 {
+        let mut i = 0;
+        while i + 1 < data.len() {
+            if data[i] == ZPAD && data[i + 1] == ZPAD {
+                break;
+            }
+            i += 1;
+        }
+        if i + 3 >= data.len() || data[i + 2] != ZDLE {
             return None;
         }
-
+        let hex_start = i + 4;
+        if data.len() < hex_start + 12 {
+            return None;
+        }
         let frame_type = Self::hex_to_byte(data[hex_start], data[hex_start + 1]).ok()?;
         let mut payload = Vec::new();
-        for i in (hex_start + 2..hex_start + 10).step_by(2) {
-            payload.push(Self::hex_to_byte(data[i], data[i + 1]).ok()?);
+        for j in (hex_start + 2..hex_start + 8).step_by(2) {
+            payload.push(Self::hex_to_byte(data[j], data[j + 1]).ok()?);
         }
         Some((frame_type, payload))
     }
@@ -159,25 +166,27 @@ impl ZmodemHandler {
             self.active = true;
             self.receiving = true;
             self.phase = ZmodemPhase::WaitInit;
+            eprintln!("[ZMODEM] Detected start, {} bytes", data.len());
 
             if let Some(path) = save_path {
                 self.save_path = Some(path);
             }
 
-            if let Some((frame_type, _payload)) = Self::parse_header(data) {
+            if let Some((frame_type, payload)) = Self::parse_header(data) {
+                eprintln!("[ZMODEM] Frame type: 0x{:02x}", frame_type);
                 match frame_type {
                     ZRQINIT => {
                         self.phase = ZmodemPhase::WaitFile;
-                        return ZmodemAction::SendData(
-                            Self::build_header(ZRINIT, [0x00; 4])
-                        );
+                        let resp = Self::build_header(ZRINIT, [0x00; 4]);
+                        eprintln!("[ZMODEM] -> ZRINIT ({} bytes)", resp.len());
+                        return ZmodemAction::SendData(resp);
                     }
                     _ => {}
                 }
             }
-            return ZmodemAction::SendData(
-                Self::build_header(ZRINIT, [0x00; 4])
-            );
+            let resp = Self::build_header(ZRINIT, [0x00; 4]);
+            eprintln!("[ZMODEM] -> ZRINIT fallback ({} bytes)", resp.len());
+            return ZmodemAction::SendData(resp);
         }
 
         if !self.active {
@@ -185,6 +194,7 @@ impl ZmodemHandler {
         }
 
         if let Some((frame_type, payload)) = Self::parse_header(data) {
+            eprintln!("[ZMODEM] Active frame: 0x{:02x}", frame_type);
             match frame_type {
                 ZRQINIT => {
                     self.phase = ZmodemPhase::WaitFile;

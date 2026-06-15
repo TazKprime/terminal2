@@ -341,6 +341,7 @@ fn connect_ssh2(
                 if zmodem.active || ZmodemHandler::is_zmodem_start(data) {
                     let save_path = app_dir.join("downloads").to_string_lossy().to_string();
                     let action = zmodem.handle_data(data, Some(save_path));
+                    eprintln!("[ZMODEM] action={:?}", std::mem::discriminant(&action));
 
                     match action {
                         ZmodemAction::SendData(resp) => {
