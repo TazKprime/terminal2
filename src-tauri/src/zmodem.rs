@@ -155,8 +155,16 @@ impl ZmodemHandler {
                     eprintln!("[ZMODEM] frame=0x{:02x} (initial)", frame_type);
                     match frame_type {
                         ZRQINIT | ZNAK => {
-                            let resp = Self::make_header(ZRINIT, [0, 0, 0]);
-                            eprintln!("[ZMODEM] -> ZRINIT ({} bytes): {:?}", resp.len(), &resp[..16]);
+                            let mut resp = Vec::new();
+                            for _ in 0..5 {
+                                resp.push(0x18);
+                            }
+                            for _ in 0..10 {
+                                resp.push(0x08);
+                            }
+                            let zrinit = Self::make_header(ZRINIT, [0, 0, 0]);
+                            resp.extend_from_slice(&zrinit);
+                            eprintln!("[ZMODEM] -> CAN+BS+ZRINIT ({} bytes): {:?}", resp.len(), &resp[zrinit.len()..]);
                             return ZmodemAction::SendToChannel(resp);
                         }
                         _ => {}
@@ -171,7 +179,15 @@ impl ZmodemHandler {
             match frame_type {
                 ZRQINIT => {
                     self.phase = Phase::WaitFile;
-                    let resp = Self::make_header(ZRINIT, [0, 0, 0]);
+                    let mut resp = Vec::new();
+                    for _ in 0..5 {
+                        resp.push(0x18);
+                    }
+                    for _ in 0..10 {
+                        resp.push(0x08);
+                    }
+                    let zrinit = Self::make_header(ZRINIT, [0, 0, 0]);
+                    resp.extend_from_slice(&zrinit);
                     return ZmodemAction::SendToChannel(resp);
                 }
                 ZFILE => {
