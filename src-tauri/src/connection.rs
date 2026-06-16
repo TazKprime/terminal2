@@ -353,18 +353,23 @@ fn connect_ssh2(
                     match action {
                         ZmodemAction::SendToChannel(resp) => {
                             eprintln!("[ZMODEM] -> writing {} bytes to channel", resp.len());
+                            session.set_blocking(true);
                             if let Err(e) = channel.write_all(&resp) {
                                 eprintln!("[ZMODEM] write error: {}", e);
                             }
-                            let _ = channel.flush();
-                            thread::sleep(std::time::Duration::from_millis(50));
+                            if let Err(e) = channel.flush() {
+                                eprintln!("[ZMODEM] flush error: {}", e);
+                            }
+                            session.set_blocking(false);
                         }
                         ZmodemAction::FileData(chunk) => {
                             zmodem.file_data.extend_from_slice(&chunk);
                         }
                         ZmodemAction::Finished(resp) => {
+                            session.set_blocking(true);
                             let _ = channel.write_all(&resp);
                             let _ = channel.flush();
+                            session.set_blocking(false);
                             if !zmodem.file_data.is_empty() && !zmodem.file_name.is_empty() {
                                 let download_dir = app_dir.join("downloads");
                                 std::fs::create_dir_all(&download_dir).ok();
