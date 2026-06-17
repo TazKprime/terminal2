@@ -21,6 +21,7 @@ pub struct ZmodemHandler {
     pub file_size: u64,
     pub file_data: Vec<u8>,
     pub phase: Phase,
+    buffer: Vec<u8>,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -39,6 +40,7 @@ impl ZmodemHandler {
             file_size: 0,
             file_data: Vec::new(),
             phase: Phase::Idle,
+            buffer: Vec::new(),
         }
     }
 
@@ -48,6 +50,7 @@ impl ZmodemHandler {
         self.file_size = 0;
         self.file_data.clear();
         self.phase = Phase::Idle;
+        self.buffer.clear();
     }
 
     pub fn is_zmodem(data: &[u8]) -> bool {
@@ -77,22 +80,30 @@ impl ZmodemHandler {
         Some((Self::hex_digit(hi)? << 4) | Self::hex_digit(lo)?)
     }
 
-    fn parse_header(data: &[u8]) -> Option<(u8, u32)> {
-        let mut i = 0;
-        while i + 3 < data.len() {
-            if data[i] == ZPAD && data[i + 1] == ZPAD && data[i + 2] == ZDLE {
-                let hex_start = i + 4;
-                if data.len() >= hex_start + 12 {
-                    let frame_type = Self::hex_byte(data[hex_start], data[hex_start + 1])?;
-                    let mut val: u32 = 0;
-                    for j in (hex_start + 2..hex_start + 8).step_by(2) {
-                        let b = Self::hex_byte(data[j], data[j + 1])?;
-                        val = (val << 8) | (b as u32);
+    fn find_header(buf: &[u8]) -> Option<usize> {
+        for i in 0..buf.len().saturating_sub(2) {
+            if buf[i] == ZPAD && buf[i + 1] == ZPAD && buf[i + 2] == ZDLE {
+                if i + 3 < buf.len() {
+                    let c = buf[i + 3];
+                    if c == b'B' || c == b'@' || c == b'C' || c == b'b' || c == b'c' {
+                        return Some(i);
                     }
-                    return Some((frame_type, val));
                 }
             }
-            i += 1;
+        }
+        None
+    }
+
+    fn parse_header_at(buf: &[u8], start: usize) -> Option<(u8, u32)> {
+        let hex_start = start + 4;
+        if buf.len() >= hex_start + 12 {
+            let frame_type = Self::hex_byte(buf[hex_start], buf[hex_start + 1])?;
+            let mut val: u32 = 0;
+            for j in (hex_start + 2..hex_start + 8).step_by(2) {
+                let b = Self::hex_byte(buf[j], buf[j + 1])?;
+                val = (val << 8) | (b as u32);
+            }
+            return Some((frame_type, val));
         }
         None
     }
@@ -146,92 +157,116 @@ impl ZmodemHandler {
         out
     }
 
+    fn make_can_bs_zrinit() -> Vec<u8> {
+        let mut resp = Vec::with_capacity(31);
+        for _ in 0..5 {
+            resp.push(0x18);
+        }
+        for _ in 0..10 {
+            resp.push(0x08);
+        }
+        let zrinit = Self::make_header(ZRINIT, [0, 0, 0]);
+        resp.extend_from_slice(&zrinit);
+        resp
+    }
+
+    fn drain_buffered_frames(&mut self) -> Option<ZmodemAction> {
+        loop {
+            let header_pos = match Self::find_header(&self.buffer) {
+                Some(p) => p,
+                None => {
+                    self.buffer.clear();
+                    return None;
+                }
+            };
+
+            if header_pos > 0 {
+                eprintln!("[ZMODEM] rx: discarding {} non-zmodem bytes before header", header_pos);
+                self.buffer.drain(..header_pos);
+            }
+
+            match Self::parse_header_at(&self.buffer, 0) {
+                Some((frame_type, val)) => {
+                    eprintln!("[ZMODEM] frame=0x{:02x} val=0x{:08x}", frame_type, val);
+                    let consumed = 4 + 12;
+                    self.buffer.drain(..consumed);
+
+                    match self.process_frame(frame_type, val) {
+                        action @ ZmodemAction::SendToChannel(_) |
+                        action @ ZmodemAction::Finished(_) => return Some(action),
+                        ZmodemAction::None => continue,
+                        action => return Some(action),
+                    }
+                }
+                None => {
+                    eprintln!("[ZMODEM] rx: incomplete header ({} bytes in buffer)", self.buffer.len());
+                    return None;
+                }
+            }
+        }
+    }
+
+    fn process_frame(&mut self, frame_type: u8, _val: u32) -> ZmodemAction {
+        match frame_type {
+            ZRQINIT => {
+                self.phase = Phase::WaitFile;
+                ZmodemAction::SendToChannel(Self::make_can_bs_zrinit())
+            }
+            ZFILE => {
+                self.phase = Phase::Receiving;
+                ZmodemAction::SendToChannel(Self::make_header(ZRPOS, [0, 0, 0]))
+            }
+            ZDATA => {
+                ZmodemAction::SendToChannel(Self::make_header(ZACK, [0, 0, 0]))
+            }
+            ZEOF => {
+                self.phase = Phase::Done;
+                ZmodemAction::SendToChannel(Self::make_header(ZRINIT, [0, 0, 0]))
+            }
+            ZFIN => {
+                let resp = Self::make_header(ZFIN, [0, 0, 0]);
+                self.reset();
+                ZmodemAction::Finished(resp)
+            }
+            ZNAK => {
+                ZmodemAction::SendToChannel(Self::make_header(ZRINIT, [0, 0, 0]))
+            }
+            _ => {
+                ZmodemAction::SendToChannel(Self::make_header(ZACK, [0, 0, 0]))
+            }
+        }
+    }
+
     pub fn handle(&mut self, data: &[u8]) -> ZmodemAction {
         if !self.active {
             if Self::is_zmodem(data) {
                 self.active = true;
                 eprintln!("[ZMODEM] Detected start in {} bytes", data.len());
-                if let Some((frame_type, _val)) = Self::parse_header(data) {
-                    eprintln!("[ZMODEM] frame=0x{:02x} (initial)", frame_type);
-                    match frame_type {
-                        ZRQINIT | ZNAK => {
-                            let mut resp = Vec::new();
-                            for _ in 0..5 {
-                                resp.push(0x18);
-                            }
-                            for _ in 0..10 {
-                                resp.push(0x08);
-                            }
-                            let zrinit = Self::make_header(ZRINIT, [0, 0, 0]);
-                            resp.extend_from_slice(&zrinit);
-                            eprintln!("[ZMODEM] -> CAN+BS+ZRINIT ({} bytes): {:?}", resp.len(), &resp[zrinit.len()..]);
-                            return ZmodemAction::SendToChannel(resp);
-                        }
-                        _ => {}
-                    }
-                }
+                self.buffer.extend_from_slice(data);
+                return match self.drain_buffered_frames() {
+                    Some(action) => action,
+                    None => ZmodemAction::None,
+                };
             }
             return ZmodemAction::PassThrough;
         }
 
-        if let Some((frame_type, val)) = Self::parse_header(data) {
-            eprintln!("[ZMODEM] frame=0x{:02x} val=0x{:08x}", frame_type, val);
-            match frame_type {
-                ZRQINIT => {
-                    self.phase = Phase::WaitFile;
-                    let mut resp = Vec::new();
-                    for _ in 0..5 {
-                        resp.push(0x18);
+        self.buffer.extend_from_slice(data);
+        eprintln!("[ZMODEM] rx: {} bytes ({} total in buffer)", data.len(), self.buffer.len());
+
+        match self.drain_buffered_frames() {
+            Some(action) => action,
+            None => {
+                if self.phase == Phase::Receiving || self.phase == Phase::WaitFile {
+                    let chunk: Vec<u8> = self.buffer.drain(..).collect();
+                    if !chunk.is_empty() {
+                        self.file_data.extend_from_slice(&chunk);
+                        return ZmodemAction::FileData(chunk);
                     }
-                    for _ in 0..10 {
-                        resp.push(0x08);
-                    }
-                    let zrinit = Self::make_header(ZRINIT, [0, 0, 0]);
-                    resp.extend_from_slice(&zrinit);
-                    return ZmodemAction::SendToChannel(resp);
                 }
-                ZFILE => {
-                    self.phase = Phase::Receiving;
-                    return ZmodemAction::SendToChannel(
-                        Self::make_header(ZRPOS, [0, 0, 0])
-                    );
-                }
-                ZDATA => {
-                    return ZmodemAction::SendToChannel(
-                        Self::make_header(ZACK, [0, 0, 0])
-                    );
-                }
-                ZEOF => {
-                    self.phase = Phase::Done;
-                    let resp = Self::make_header(ZRINIT, [0, 0, 0]);
-                    return ZmodemAction::SendToChannel(resp);
-                }
-                ZFIN => {
-                    let resp = Self::make_header(ZFIN, [0, 0, 0]);
-                    self.reset();
-                    return ZmodemAction::Finished(resp);
-                }
-                ZNAK => {
-                    return ZmodemAction::SendToChannel(
-                        Self::make_header(ZRINIT, [0, 0, 0])
-                    );
-                }
-                _ => {
-                    return ZmodemAction::SendToChannel(
-                        Self::make_header(ZACK, [0, 0, 0])
-                    );
-                }
+                ZmodemAction::None
             }
         }
-
-        if self.phase == Phase::Receiving || self.phase == Phase::WaitFile {
-            if !Self::is_zmodem(data) && !data.is_empty() {
-                self.file_data.extend_from_slice(data);
-                return ZmodemAction::FileData(data.to_vec());
-            }
-        }
-
-        ZmodemAction::None
     }
 }
 
