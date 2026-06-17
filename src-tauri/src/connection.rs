@@ -352,13 +352,16 @@ fn connect_ssh2(
 
                     match action {
                         ZmodemAction::SendToChannel(resp) => {
-                            eprintln!("[ZMODEM] -> writing {} bytes to channel", resp.len());
+                            eprintln!("[ZMODEM] -> writing {} bytes to channel hex: {}", resp.len(),
+                                resp.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" "));
                             session.set_blocking(true);
-                            if let Err(e) = channel.write_all(&resp) {
-                                eprintln!("[ZMODEM] write error: {}", e);
+                            match channel.write_all(&resp) {
+                                Ok(()) => eprintln!("[ZMODEM] write_all OK"),
+                                Err(e) => eprintln!("[ZMODEM] write_all error: {}", e),
                             }
-                            if let Err(e) = channel.flush() {
-                                eprintln!("[ZMODEM] flush error: {}", e);
+                            match channel.flush() {
+                                Ok(()) => eprintln!("[ZMODEM] flush OK"),
+                                Err(e) => eprintln!("[ZMODEM] flush error: {}", e),
                             }
                             session.set_blocking(false);
                         }
