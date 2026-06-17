@@ -175,7 +175,10 @@ impl ZmodemHandler {
             let header_pos = match Self::find_header(&self.buffer) {
                 Some(p) => p,
                 None => {
-                    self.buffer.clear();
+                    if !self.buffer.is_empty() {
+                        eprintln!("[ZMODEM] rx: no header in {} bytes: {:?}", self.buffer.len(),
+                            self.buffer.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" "));
+                    }
                     return None;
                 }
             };
@@ -252,7 +255,8 @@ impl ZmodemHandler {
         }
 
         self.buffer.extend_from_slice(data);
-        eprintln!("[ZMODEM] rx: {} bytes ({} total in buffer)", data.len(), self.buffer.len());
+        eprintln!("[ZMODEM] rx: {} bytes ({} total in buffer) hex: {}", data.len(), self.buffer.len(),
+            self.buffer.iter().map(|b| format!("{:02x}", b)).collect::<Vec<_>>().join(" "));
 
         match self.drain_buffered_frames() {
             Some(action) => action,
