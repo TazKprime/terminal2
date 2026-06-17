@@ -157,17 +157,8 @@ impl ZmodemHandler {
         out
     }
 
-    fn make_can_bs_zrinit() -> Vec<u8> {
-        let mut resp = Vec::with_capacity(31);
-        for _ in 0..5 {
-            resp.push(0x18);
-        }
-        for _ in 0..10 {
-            resp.push(0x08);
-        }
-        let zrinit = Self::make_header(ZRINIT, [0, 0, 0]);
-        resp.extend_from_slice(&zrinit);
-        resp
+    fn make_zrinit_response() -> Vec<u8> {
+        Self::make_header(ZRINIT, [0, 0, 0])
     }
 
     fn drain_buffered_frames(&mut self) -> Option<ZmodemAction> {
@@ -213,7 +204,7 @@ impl ZmodemHandler {
         match frame_type {
             ZRQINIT => {
                 self.phase = Phase::WaitFile;
-                ZmodemAction::SendToChannel(Self::make_can_bs_zrinit())
+                ZmodemAction::SendToChannel(Self::make_zrinit_response())
             }
             ZFILE => {
                 self.phase = Phase::Receiving;
